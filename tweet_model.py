@@ -1,74 +1,83 @@
 import pandas as pd
 import numpy as np
+import requests
 import tarfile
 
+from sklearn.model_selection import StratifiedKFold
+from sklearn.linear_model import LogisticRegression
+from requests.auth import HTTPBasicAuth
 from random import shuffle
 
-from text_helpers import parse_julia_file, parse_tweet_text
-
-TWEET_COLUMNS = ["user_id", "tweet_text", "hashtags", "users_mentioned_name", "users_mentioned_screen_name",
-                 "user_replied_to", "rt_text", "quote_text", "gender"]
-
-TWITTER_CONSUMER_KEY = "3RZxLkkQFDMnN3epDPOcP61hP"
-TWITTER_CONSUMER_SECRET = "cwfoe7umOC4tAIJE4VmirEjmQE2NPWlnfCr91jS0EQUiOB4cNk"
-
-TWITTER_ACCESS_TOKEN = "1972482236-r6kxpQXXcBKTIRdwPXGjEzhLN2v5asQaO6s4kA3"
-TWITTER_ACCESS_SECRET = "RkW6alMhS7AIIE70rTfDtlvpiCZOl7bDAw5iBqqOob2HU"
+from helpers import parse_julia_file, parse_tweet_text
+from constants import TWEET_COLUMNS, TWITTER_ROOT_URL, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET
 
 tar = tarfile.open("mso_ds_interview.tgz", "r")
 manifest = tar.extractfile("ds_interview/manifest.jl")
 manifest_details = parse_julia_file(manifest)
 
-# Special shuffling and segmentation for ease of testing
-# shuffle(manifest_details)
-# manifest_details = manifest_details[:10]
 
 tweets_data_list = []
 
-for user in manifest_details:
-    print(f"Pulling tweets from user {user['user_id_str']}")
-    tweet_file = tar.extractfile(f"ds_interview/tweet_files/{user['user_id_str']}.tweets.jl")
-    user_tweets = parse_julia_file(tweet_file)
+# Authenticate to Twitter API
+auth = HTTPBasicAuth(TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET)
+auth_response = requests.post(f"{TWITTER_ROOT_URL}/oauth2/token?grant_type=client_credentials", auth=auth).json()
+headers = {"Authorization": f"Bearer {auth_response['access_token']}"}
 
-    for t in user_tweets:
-        tdoc = t["document"]
+with requests.session() as session:
+    session.headers = headers
 
-        tweet_text = parse_tweet_text(tdoc)
-        hashtags = " | ".join([h["text"] for h in tdoc["entities"]["hashtags"]])
-        users_mentioned = " | ".join([u["name"] for u in tdoc["entities"]["user_mentions"]])
-        users_mentioned_sn = " | ".join(u["screen_name"] for u in tdoc["entities"]["user_mentions"])
-        user_replied_to = tdoc["in_reply_to_screen_name"]
+    for user in manifest_details:
+        user_id = user["user_id_str"]
+        print(f"Pulling tweets from user {user_id}")
 
-        rt_text = ""
-        quote_text = ""
+        api_result = session.get(f"{TWITTER_ROOT_URL}/1.1/users/lookup.json?user_id={user_id}").json()
+        if "errors" in api_result:
+            profile_description = ""
+            user_followers_count = ""
+            user_following_count = ""
 
-        if "retweeted_status" in tdoc:
-            if tdoc["retweeted_status"] is not None:
-                rt_text = parse_tweet_text(tdoc["retweeted_status"])
+        else:
+            user_info = api_result[0]
 
-                if "quoted_status" in tdoc["retweeted_status"]:
-                    if tdoc["retweeted_status"]["quoted_status"] is not None:
-                        quote_text = parse_tweet_text(tdoc["retweeted_status"]["quoted_status"])
+            profile_description = user_info["description"]
+            user_followers_count = user_info["followers_count"]
+            user_following_count = user_info["friends_count"]
 
-        tweets_data_list.append([
-            user["user_id_str"],
-            tweet_text,
-            hashtags,
-            users_mentioned,
-            users_mentioned_sn,
-            user_replied_to,
-            rt_text,
-            quote_text,
-            user["gender_human"]
-        ])
+        tweet_file = tar.extractfile(f"ds_interview/tweet_files/{user_id}.tweets.jl")
+        user_tweets = parse_julia_file(tweet_file)
+
+        for t in user_tweets:
+            tdoc = t["document"]
+            tweet_text = parse_tweet_text(tdoc)
+            retweet_count = tdoc["retweet_count"]
+            favorite_count = tdoc["favorite_count"]
+            user_mentions = int(bool(tdoc["entities"]["user_mentions"]))
+
+            tweets_data_list.append([
+                tweet_text,
+                profile_description,
+                user_mentions,
+                retweet_count,
+                favorite_count,
+                user_followers_count,
+                user_following_count,
+                user["gender_human"]
+            ])
 
 shuffle(tweets_data_list)
 
 tweets_df = pd.DataFrame(tweets_data_list, columns=TWEET_COLUMNS)
-tweets_df.to_csv("C:\\Users\\DLaki\\OneDrive\\Desktop\\Github\\ms1_df.csv", index=False)
 
-# Apply transforms to dataframe
+# Transform text data to TF-IDF
+
+
+# Pull out labels
 gender_map = {"M": 0, "F": 1}
-tweets_df["gender"] = tweets_df["gender"].map(gender_map)
+y = tweets_df["gender"].map(gender_map)
+tweets_df.drop("gender", axis=1, inplace=True)
+
+# Separate training, validation, and test data
+skf = StratifiedKFold(n_splits=3)
+skf.get_n_splits(tweets_df, y)
 
 tar.close()
