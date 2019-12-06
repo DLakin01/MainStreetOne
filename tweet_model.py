@@ -1,5 +1,4 @@
 import pandas as pd
-import numpy as np
 import requests
 import tarfile
 
@@ -8,8 +7,8 @@ from sklearn.linear_model import LogisticRegression
 from requests.auth import HTTPBasicAuth
 from random import shuffle
 
-from helpers import parse_julia_file, parse_tweet_text
 from constants import TWEET_COLUMNS, TWITTER_ROOT_URL, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET
+from helpers import parse_julia_file, parse_tweet_text
 
 tar = tarfile.open("mso_ds_interview.tgz", "r")
 manifest = tar.extractfile("ds_interview/manifest.jl")

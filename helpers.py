@@ -4,7 +4,7 @@ import json
 from nltk.tokenize import word_tokenize
 from tarfile import ExFileObject
 
-from constants import PUNCTUATION_TABLE, STOP_WORDS
+from constants import PUNCTUATION_TABLE, STOP_WORDS, CONTRACTION_MAP
 
 
 def parse_julia_file(tarfile: ExFileObject):
@@ -41,7 +41,10 @@ def clean_text(text: str) -> list:
         elif any(char.isdigit() for char in word):
             continue
 
-        if "/" in word:
+        if word in CONTRACTION_MAP:
+            parsed_text.append(CONTRACTION_MAP[word])
+
+        elif "/" in word:
             split_words = word.split("/")
             split_words = [w.translate(PUNCTUATION_TABLE) for w in split_words]
             parsed_text.extend(split_words)
