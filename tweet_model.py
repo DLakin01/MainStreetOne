@@ -1,14 +1,14 @@
 import pandas as pd
+import numpy as np
 import requests
 import tarfile
+import spacy
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.linear_model import LogisticRegression
 from requests.auth import HTTPBasicAuth
-from random import shuffle
+from spacymoji import Emoji
 
 from constants import TWEET_COLUMNS, TWITTER_ROOT_URL, TWITTER_CONSUMER_KEY, TWITTER_CONSUMER_SECRET
-from helpers import parse_julia_file, parse_tweet_text
+from helpers import parse_julia_file, parse_tweet_text, extract_features
 
 tar = tarfile.open("mso_ds_interview.tgz", "r")
 manifest = tar.extractfile("ds_interview/manifest.jl")
@@ -32,51 +32,48 @@ with requests.session() as session:
         api_result = session.get(f"{TWITTER_ROOT_URL}/1.1/users/lookup.json?user_id={user_id}").json()
         if "errors" in api_result:
             profile_description = ""
-            user_followers_count = ""
-            user_following_count = ""
 
         else:
-            user_info = api_result[0]
-
-            profile_description = user_info["description"]
-            user_followers_count = user_info["followers_count"]
-            user_following_count = user_info["friends_count"]
+            profile_description = api_result[0]["description"]
 
         tweet_file = tar.extractfile(f"ds_interview/tweet_files/{user_id}.tweets.jl")
         user_tweets = parse_julia_file(tweet_file)
 
         for t in user_tweets:
             tdoc = t["document"]
-            tweet_text = parse_tweet_text(tdoc)
-            retweet_count = tdoc["retweet_count"]
-            favorite_count = tdoc["favorite_count"]
-            user_mentions = int(bool(tdoc["entities"]["user_mentions"]))
+            combined_text = parse_tweet_text(tdoc) + " " + profile_description
+            has_mentions = int(bool(tdoc["entities"]["user_mentions"]))
+            num_mentions = len(tdoc["entities"]["user_mentions"])
+            has_hashtags = int(bool(tdoc["entities"]["hashtags"]))
+            num_hashtags = len(tdoc["entities"]["hashtags"])
 
             tweets_data_list.append([
-                tweet_text,
-                profile_description,
-                user_mentions,
-                retweet_count,
-                favorite_count,
-                user_followers_count,
-                user_following_count,
+                combined_text,
+                has_mentions,
+                num_mentions,
+                has_hashtags,
+                num_hashtags,
                 user["gender_human"]
             ])
 
-shuffle(tweets_data_list)
-
 tweets_df = pd.DataFrame(tweets_data_list, columns=TWEET_COLUMNS)
 
-# Transform text data to TF-IDF
+# Take a sample of the dataset for ease of processing
+tweets_df = tweets_df.sample(frac=0.1, random_state=1)
+
+# Cleaning and feature extraction
+nlp = spacy.load("en")
+emoji = Emoji(nlp, merge_spans=False)
+nlp.add_pipe(emoji, first=True)
+
+tweets_df.join(pd.DataFrame.from_records(
+    tweets_df.apply(
+        lambda x: extract_features(x["tweet_and_profile_text"], x["language"], nlp), axis=1
+    ).values, index=tweets_df.index)
+)
+
 
 
 # Pull out labels
 gender_map = {"M": 0, "F": 1}
-y = tweets_df["gender"].map(gender_map)
-tweets_df.drop("gender", axis=1, inplace=True)
-
-# Separate training, validation, and test data
-skf = StratifiedKFold(n_splits=3)
-skf.get_n_splits(tweets_df, y)
-
-tar.close()
+tweets_df["gender_binary"] = tweets_df["gender"].map(gender_map)

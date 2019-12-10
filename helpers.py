@@ -1,10 +1,27 @@
+import pandas as pd
+import numpy as np
 import string
 import json
+import time
 
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import TweetTokenizer
 from tarfile import ExFileObject
+from emoji import UNICODE_EMOJI, UNICODE_EMOJI_ALIAS
+from pandas import DataFrame
+from numba import jit
 
-from constants import PUNCTUATION_TABLE, STOP_WORDS, CONTRACTION_MAP
+from constants import CONTRACTIONS, POS_MAP
+
+
+def timeit(method):
+    def timed(*args, **kw):
+        ts = time.time()
+        result = method(*args, **kw)
+        te = time.time()
+        kw['log_time'].append(int((te - ts) * 1000))
+        return result
+
+    return timed
 
 
 def parse_julia_file(tarfile: ExFileObject):
@@ -24,39 +41,59 @@ def parse_tweet_text(tweet_obj: dict):
     return text
 
 
-def clean_text(text: str) -> list:
-    # To lowercase and replace newline characters
-    text = text.lower().replace("\n", " ")
-    text_list = word_tokenize(text)
+def extract_spacy_features(texts, spacy_nlp):
+    features["num_emoticons"] = 0
+    features["num_contractions"] = 0
+    unique_words = set()
+    for token in tokenized:
+        if token.text in UNICODE_EMOJI:
+            features["num_emoticons"] += 1
 
-    # Strip out stop words, numeric strings, empty strings, and punctuation
-    parsed_text = []
-    for word in text_list:
-        if word in STOP_WORDS:
-            continue
-        elif word is "":
-            continue
-        elif word in string.punctuation:
-            continue
-        elif any(char.isdigit() for char in word):
-            continue
+        if token.text in CONTRACTIONS:
+            features["num_contractions"] += 1
 
-        if word in CONTRACTION_MAP:
-            parsed_text.append(CONTRACTION_MAP[word])
+        unique_words.add(token.text)
 
-        elif "/" in word:
-            split_words = word.split("/")
-            split_words = [w.translate(PUNCTUATION_TABLE) for w in split_words]
-            parsed_text.extend(split_words)
+    features["num_unique_words"] = len(unique_words)
 
-        elif "." in word:
-            split_words = word.split(".")
-            split_words = [w.translate(PUNCTUATION_TABLE) for w in split_words]
-            parsed_text.extend(split_words)
 
-        else:
-            parsed_text.append(word.translate(PUNCTUATION_TABLE))
+@jit(forceobj=True)
+def fast_extract_features(texts):
+    all_features = []
+    
+    for text in texts:
+        text = str(text)
+        features = {}
+        tokenized = text.split()
 
-    parsed_text = [word for word in parsed_text if len(word) > 1]
+        features["tweet_length"] = len(text)
+        features["num_words"] = len(tokenized)
+        features["num_exclamation_pts"] = text.count("!")
+        features["num_question_mks"] = text.count("?")
+        features["num_periods"] = text.count(".")
+        features["num_hyphens"] = text.count("-")
 
-    return list(set(parsed_text))
+        features["num_capitals"] = 0
+        features["num_punctuation_mks"] = 0
+        for char in text:
+            if char.isupper():
+                features["num_capitals"] += 1
+
+            if char in string.punctuation:
+                features["num_punctuation_mks"] += 1
+
+        all_features.append(features)
+
+    return all_features
+
+
+@jit(nopython=True)
+def language_detect(text, spacy_nlp):
+    """
+    Check language using spacy_langdetect and return to DataFrame
+    """
+    lang = spacy_nlp(str(text))._.language
+    if lang["score"] >= .9:
+        return lang["language"]
+    else:
+        return "en"
