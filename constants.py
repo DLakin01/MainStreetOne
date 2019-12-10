@@ -1,11 +1,14 @@
-import spacy
+FILE_PATH = "C:\\Users\\DLakin\\Desktop\\Github"
+# FILE_PATH = "C:\\Users\\DLaki\\OneDrive\\Desktop\\Github"
 
-TWEET_COLUMNS = ["combined_text", "has_mention", "num_mentions", "has_hashtags", "num_hashtags", "gender"]
+TWEET_COLUMNS = ["combined_text", "language", "has_mention", "num_mentions", "has_hashtags", "num_hashtags", "gender"]
 
 TWITTER_ROOT_URL = "https://api.twitter.com"
 
 TWITTER_CONSUMER_KEY = "3RZxLkkQFDMnN3epDPOcP61hP"
 TWITTER_CONSUMER_SECRET = "cwfoe7umOC4tAIJE4VmirEjmQE2NPWlnfCr91jS0EQUiOB4cNk"
+
+SPACY_LANGS = ["de", "el", "en", "es", "fr", "it", "lt", "nb", "nl", "pt"]
 
 POS_MAP = {
     "ADJ": "num_adjectives",

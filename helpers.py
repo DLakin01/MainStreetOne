@@ -4,11 +4,9 @@ import string
 import json
 import time
 
-from langdetect.lang_detect_exception import LangDetectException
-from tarfile import ExFileObject
 from emoji import UNICODE_EMOJI, UNICODE_EMOJI_ALIAS
-from numba.typed import Dict, List
-from numba import jit, types
+from tarfile import ExFileObject
+from textblob import TextBlob
 
 from constants import CONTRACTIONS, POS_MAP
 
@@ -41,33 +39,39 @@ def parse_tweet_text(tweet_obj: dict):
     return text
 
 
-def extract_spacy_features(texts, spacy_nlp):
+def extract_linguistic_features(texts, spacy_nlp):
     all_features = []
 
-    for text in texts:
-        text = str(text)
-        tokenized = spacy_nlp(text)
-
+    for doc in spacy_nlp.pipe(texts, n_threads=16, batch_size=10000):
         features = {
-            "num_words": len(tokenized),
-            "num_emoticons": 0,
-            "num_contractions": 0,
+            "num_words": len(doc),
+            "tweet_length": len(doc.text),
+            "num_exclamation_pts": doc.text.count("!"),
+            "num_question_mks": doc.text.count("?"),
+            "num_periods": doc.text.count("."),
+            "num_hyphens": doc.text.count("-"),
+            "num_capitals": sum(1 for char in doc.text if char.isupper()),
+            "num_emoticons": sum(
+                1 for token in doc
+                if token._.is_emoji
+                or token in UNICODE_EMOJI
+                or token in UNICODE_EMOJI_ALIAS
+            ),
+            "num_unique_words": len(set(token.text for token in doc)),
             "num_adjectives": 0,
+            "num_nouns": 0,
+            "num_pronouns": 0,
             "num_adverbs": 0,
             "num_conjunctions": 0,
-            "num_nouns": 0,
             "num_numerals": 0,
             "num_particles": 0,
-            "num_pronouns": 0,
             "num_proper_nouns": 0,
-            "num_verbs": 0
+            "num_verbs": 0,
+            "num_contractions": 0,
+            "num_punctuation_mks": 0
         }
 
-        unique_words = set()
-        for token in tokenized:
-            if token._.is_emoji or token.text in UNICODE_EMOJI or token.text in UNICODE_EMOJI_ALIAS:
-                features["num_emoticons"] += 1
-
+        for token in doc:
             if token.text in CONTRACTIONS:
                 features["num_contractions"] += 1
 
@@ -75,59 +79,16 @@ def extract_spacy_features(texts, spacy_nlp):
                 column_key = POS_MAP[token.pos_]
                 features[column_key] += 1
 
-            unique_words.add(token.text)
-
-        features["num_unique_words"] = len(unique_words)
         all_features.append(features)
 
     return all_features
 
 
-@jit(forceobj=True)
-def fast_extract_features(texts):
-    all_features = []
-    
-    for text in texts:
-        text = str(text)
-
-        features = {
-            "tweet_length": len(text),
-            "num_exclamation_pts": text.count("!"),
-            "num_question_mks": text.count("?"),
-            "num_periods": text.count("."),
-            "num_hyphens": text.count("-"),
-            "num_capitals": 0,
-            "num_punctuation_mks": 0
-        }
-
-        for char in text:
-            if char.isupper():
-                features["num_capitals"] += 1
-
-            if char in string.punctuation:
-                features["num_punctuation_mks"] += 1
-
-        all_features.append(features)
-
-    return all_features
-
-
-def language_detect(texts, spacy_nlp):
+def parse_sentiment(texts):
     """
-    Check language using spacy_langdetect and return to DataFrame
+    Utility function to classify sentiment of passed tweet
+    using textblob's sentiment method
     """
-    all_languages = []
 
-    for text in texts:
-        try:
-            text = str(text)
-            lang = spacy_nlp(text)._.language
-            if lang["score"] >= .9:
-                all_languages.append({"language": lang["language"]})
-            else:
-                all_languages.append({"language": "en"})
-
-        except (TypeError, LangDetectException):
-            pass
-
-    return all_languages
+    # Create TextBlob object of tweet text
+    parsed = TextBlob(clean_tweet(tweet))

@@ -3,15 +3,14 @@ import statsmodels.api as sm
 import seaborn as sns
 import pandas as pd
 import numpy as np
-import matplotlib
 import spacy
 
 from sklearn.linear_model import LogisticRegression, RidgeCV, LassoCV, Ridge, Lasso
 from sklearn.feature_selection import RFE
-from spacy_langdetect import LanguageDetector
 from spacymoji import Emoji
 
-from helpers import fast_extract_features, language_detect, extract_spacy_features
+from helpers import extract_linguistic_features
+from constants import FILE_PATH, SPACY_LANGS
 
 
 def simple_logistic_classify(X_tr, y_tr, X_te, y_te, description):
@@ -21,31 +20,30 @@ def simple_logistic_classify(X_tr, y_tr, X_te, y_te, description):
     return m
 
 
-df = pd.read_csv("C:\\Users\\DLaki\\OneDrive\\Desktop\\Github\\ms1_df.csv")
+df = pd.read_csv(f"{FILE_PATH}\\ms1_df.csv", dtype={"combined_text": str})
 df = df.sample(frac=0.05, random_state=1)
 
 # Cleaning and feature extraction
-nlp = spacy.load("en")
-nlp.add_pipe(LanguageDetector(), name="language_detector", last=True)
 
-# Check language of each tweet and throw out samples that spaCy can't parse
-df = df.join(pd.DataFrame.from_records(
-    language_detect(df["combined_text"].values, nlp)
-))
-df = df[~df["language"].isin(["de", "el", "es", "fr", "it", "lt", "nb", "nl", "pt"])]
+# Throw out samples that spaCy can't parse
+df = df[df["language"].isin(SPACY_LANGS)]
 
-# Get counts of simple linguistic features
-df = df.join(pd.DataFrame.from_records(
-    fast_extract_features(df["combined_text"].values)
-))
+split_by_lang = [{"lang": lang, "df": df[df["language"] == lang]} for lang in SPACY_LANGS]
 
-# # Get counts of parts of speech, emoticons, contractions
-emoji = Emoji(nlp, merge_spans=False)
-nlp.add_pipe(emoji, first=True)
+for item in split_by_lang:
+    nlp = spacy.load(item["lang"])
+    emoji = Emoji(nlp, merge_spans=False)
+    nlp.add_pipe(emoji, first=True)
 
-df = df.join(pd.DataFrame.from_records(
-    extract_spacy_features(df["combined_text"].values, nlp)
-))
+    texts = item["df"]["combined_text"].tolist()
+    spacy_features = extract_linguistic_features(texts, nlp)
+
+    temp_df = pd.DataFrame.from_records(spacy_features)
+
+    item["df"] = item["df"].join(pd.DataFrame.from_records(spacy_features))
+
+df = pd.concat([lang_item["df"] for lang_item in split_by_lang])
+
 
 df.to_csv("C:\\Users\\DLaki\\OneDrive\\Desktop\\Github\\ms1_df.csv")
 
