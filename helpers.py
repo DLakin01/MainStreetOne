@@ -4,11 +4,11 @@ import string
 import json
 import time
 
-from nltk.tokenize import TweetTokenizer
+from langdetect.lang_detect_exception import LangDetectException
 from tarfile import ExFileObject
 from emoji import UNICODE_EMOJI, UNICODE_EMOJI_ALIAS
-from pandas import DataFrame
-from numba import jit
+from numba.typed import Dict, List
+from numba import jit, types
 
 from constants import CONTRACTIONS, POS_MAP
 
@@ -42,19 +42,45 @@ def parse_tweet_text(tweet_obj: dict):
 
 
 def extract_spacy_features(texts, spacy_nlp):
-    features["num_emoticons"] = 0
-    features["num_contractions"] = 0
-    unique_words = set()
-    for token in tokenized:
-        if token.text in UNICODE_EMOJI:
-            features["num_emoticons"] += 1
+    all_features = []
 
-        if token.text in CONTRACTIONS:
-            features["num_contractions"] += 1
+    for text in texts:
+        text = str(text)
+        tokenized = spacy_nlp(text)
 
-        unique_words.add(token.text)
+        features = {
+            "num_words": len(tokenized),
+            "num_emoticons": 0,
+            "num_contractions": 0,
+            "num_adjectives": 0,
+            "num_adverbs": 0,
+            "num_conjunctions": 0,
+            "num_nouns": 0,
+            "num_numerals": 0,
+            "num_particles": 0,
+            "num_pronouns": 0,
+            "num_proper_nouns": 0,
+            "num_verbs": 0
+        }
 
-    features["num_unique_words"] = len(unique_words)
+        unique_words = set()
+        for token in tokenized:
+            if token._.is_emoji or token.text in UNICODE_EMOJI or token.text in UNICODE_EMOJI_ALIAS:
+                features["num_emoticons"] += 1
+
+            if token.text in CONTRACTIONS:
+                features["num_contractions"] += 1
+
+            if token.pos_ in POS_MAP:
+                column_key = POS_MAP[token.pos_]
+                features[column_key] += 1
+
+            unique_words.add(token.text)
+
+        features["num_unique_words"] = len(unique_words)
+        all_features.append(features)
+
+    return all_features
 
 
 @jit(forceobj=True)
@@ -63,18 +89,17 @@ def fast_extract_features(texts):
     
     for text in texts:
         text = str(text)
-        features = {}
-        tokenized = text.split()
 
-        features["tweet_length"] = len(text)
-        features["num_words"] = len(tokenized)
-        features["num_exclamation_pts"] = text.count("!")
-        features["num_question_mks"] = text.count("?")
-        features["num_periods"] = text.count(".")
-        features["num_hyphens"] = text.count("-")
+        features = {
+            "tweet_length": len(text),
+            "num_exclamation_pts": text.count("!"),
+            "num_question_mks": text.count("?"),
+            "num_periods": text.count("."),
+            "num_hyphens": text.count("-"),
+            "num_capitals": 0,
+            "num_punctuation_mks": 0
+        }
 
-        features["num_capitals"] = 0
-        features["num_punctuation_mks"] = 0
         for char in text:
             if char.isupper():
                 features["num_capitals"] += 1
@@ -87,13 +112,22 @@ def fast_extract_features(texts):
     return all_features
 
 
-@jit(nopython=True)
-def language_detect(text, spacy_nlp):
+def language_detect(texts, spacy_nlp):
     """
     Check language using spacy_langdetect and return to DataFrame
     """
-    lang = spacy_nlp(str(text))._.language
-    if lang["score"] >= .9:
-        return lang["language"]
-    else:
-        return "en"
+    all_languages = []
+
+    for text in texts:
+        try:
+            text = str(text)
+            lang = spacy_nlp(text)._.language
+            if lang["score"] >= .9:
+                all_languages.append({"language": lang["language"]})
+            else:
+                all_languages.append({"language": "en"})
+
+        except (TypeError, LangDetectException):
+            pass
+
+    return all_languages
