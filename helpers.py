@@ -3,6 +3,7 @@ import numpy as np
 import string
 import json
 import time
+import re
 
 from emoji import UNICODE_EMOJI, UNICODE_EMOJI_ALIAS
 from tarfile import ExFileObject
@@ -39,11 +40,12 @@ def parse_tweet_text(tweet_obj: dict):
     return text
 
 
-def extract_linguistic_features(texts, spacy_nlp):
+def extract_linguistic_features(texts, tweet_ids, spacy_nlp):
     all_features = []
 
-    for doc in spacy_nlp.pipe(texts, n_threads=16, batch_size=10000):
+    for i, doc in enumerate(spacy_nlp.pipe(texts, n_threads=16, batch_size=10000)):
         features = {
+            "id": tweet_ids[i],
             "num_words": len(doc),
             "tweet_length": len(doc.text),
             "num_exclamation_pts": doc.text.count("!"),
@@ -79,16 +81,26 @@ def extract_linguistic_features(texts, spacy_nlp):
                 column_key = POS_MAP[token.pos_]
                 features[column_key] += 1
 
+        clean_tweet = ' '.join(re.sub("(@[A-Za-z0-9]+)|([^0-9A-Za-z \t])|(\w+://\S+)", " ", doc.text).split())
+        features["sentiment"] = parse_sentiment(clean_tweet)
+
         all_features.append(features)
 
     return all_features
 
 
-def parse_sentiment(texts):
+def parse_sentiment(tweet):
     """
     Utility function to classify sentiment of passed tweet
     using textblob's sentiment method
     """
 
     # Create TextBlob object of tweet text
-    parsed = TextBlob(clean_tweet(tweet))
+    parsed = TextBlob(tweet)
+    # set sentiment
+    if parsed.sentiment.polarity > 0:
+        return 1
+    elif parsed.sentiment.polarity == 0:
+        return 0
+    else:
+        return -1

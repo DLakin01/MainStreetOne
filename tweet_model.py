@@ -42,6 +42,7 @@ with requests.session() as session:
 
         for t in user_tweets:
             tdoc = t["document"]
+            tweet_id = tdoc["id"]
             combined_text = parse_tweet_text(tdoc) + " " + profile_description
             language = tdoc["lang"]
             has_mentions = int(bool(tdoc["entities"]["user_mentions"]))
@@ -50,6 +51,7 @@ with requests.session() as session:
             num_hashtags = len(tdoc["entities"]["hashtags"])
 
             tweets_data_list.append([
+                tweet_id,
                 combined_text,
                 language,
                 has_mentions,
@@ -60,6 +62,10 @@ with requests.session() as session:
             ])
 
 tweets_df = pd.DataFrame(tweets_data_list, columns=TWEET_COLUMNS)
+tweets_df.set_index("id", inplace=True)
+# tweets_df.to_csv(f"{FILE_PATH}\\ms1_df.csv", index=False)
+# tweets_df = pd.read_csv(f"{FILE_PATH}\\ms1_df.csv", dtype={"combined_text": str})
+tweets_df = tweets_df.sample(frac=0.2, random_state=1)
 
 # Cleaning and feature extraction
 # Throw out samples that spaCy can't parse
@@ -72,12 +78,14 @@ for item in split_by_lang:
     emoji = Emoji(nlp, merge_spans=False)
     nlp.add_pipe(emoji, first=True)
 
+    tweet_ids = item["df"].index.tolist()
     texts = item["df"]["combined_text"].tolist()
-    spacy_features = extract_linguistic_features(texts, nlp)
+    if len(texts):
+        spacy_features = extract_linguistic_features(texts, tweet_ids, nlp)
+        temp_df = pd.DataFrame.from_records(spacy_features)
+        temp_df.set_index("id", inplace=True)
 
-    temp_df = pd.DataFrame.from_records(spacy_features)
-
-    item["df"] = item["df"].join(pd.DataFrame.from_records(spacy_features))
+        item["df"] = item["df"].join(temp_df)
 
 tweets_df = pd.concat([lang_item["df"] for lang_item in split_by_lang])
 tweets_df.to_csv(f"{FILE_PATH}\\ms1_df.csv")
