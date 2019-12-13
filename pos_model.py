@@ -44,11 +44,10 @@ def model_fit(estimator, X, y, predictors):
     plt.ylabel("Feature Importance Score")
 
 
-rcParams["figure.figsize"] = 12, 4
-
-df = pd.read_csv(f"{FILE_PATH}\\ms1_df.csv")
+df = pd.read_csv(f"{FILE_PATH}\\ms1_multilang_df.csv")
 df.set_index("id", inplace=True)
-
+# df = df.sample(frac=0.2, random_state=0)
+#
 # # Throw out samples that spaCy can't parse
 # multilang_df = df[df["language"].isin(SPACY_LANGS)]
 #
@@ -69,12 +68,10 @@ df.set_index("id", inplace=True)
 #         item["df"] = item["df"].join(temp_df)
 #
 # multilang_df = pd.concat([lang_item["df"] for lang_item in split_by_lang])
-# multilang_df.to_csv(f"{FILE_PATH}\\ms1_df.csv")
+# multilang_df.to_csv(f"{FILE_PATH}\\ms1_multilang_df.csv")
 
+# y = np.array(df["gender"].map({"M": 0, "F": 1}))
 
-# gender_map = {"M": 0, "F": 1}
-# y = df["gender"].map(gender_map)
-#
 df.drop(["gender", "language", "combined_text"], axis=1, inplace=True)
 onehot_labels = pd.get_dummies(df, columns=["sentiment", "has_mention", "has_hashtags"]).columns.tolist()
 
@@ -109,25 +106,64 @@ with open("X_pos.pkl", "rb") as pkl:
 train_df = pd.DataFrame(X, columns=onehot_labels)
 predictors = onehot_labels
 
-gmb0 = GradientBoostingClassifier(random_state=42)
-model_fit(gmb0, train_df, y, predictors)
+# gmb0 = GradientBoostingClassifier(random_state=42)
+# model_fit(gmb0, train_df, y, predictors)
 
-param_test_1 = {"n_estimators": range(50, 201, 10)}
-grid_search1 = GridSearchCV(
+# param_test1 = {"n_estimators": range(50, 151, 20)}
+# grid_search1 = GridSearchCV(
+#     GradientBoostingClassifier(
+#         learning_rate=0.1,
+#         max_depth=15,
+#         max_features="sqrt",
+#         subsample=0.8,
+#         random_state=42,
+#         n_iter_no_change=4,
+#         tol=1e-3,
+#         verbose=1
+#     ),
+#     param_grid=param_test1, scoring="roc_auc", cv=3, verbose=2
+# ).fit(train_df[predictors], y)
+#
+# print(grid_search1.cv_results_, grid_search1.best_params_, grid_search1.best_score_)
+
+
+# param_test2 = {"max_depth": range(5, 16, 2)}
+#
+# grid_search2 = GridSearchCV(
+#     GradientBoostingClassifier(
+#         learning_rate=0.15,
+#         n_estimators=90,
+#         max_features="sqrt",
+#         subsample=0.8,
+#         n_iter_no_change=4,
+#         tol=1e-3,
+#         random_state=42,
+#         verbose=1
+#     ),
+#     param_grid=param_test2, scoring="roc_auc", verbose=2, cv=3
+# ).fit(train_df[predictors], y)
+#
+# print(grid_search2.cv_results_, grid_search2.best_params_, grid_search2.best_score_)
+
+param_test3 = {"min_samples_split": range(200, 800, 200)}
+grid_search3 = GridSearchCV(
     GradientBoostingClassifier(
-        learning_rate=0.05,
-        min_samples_split=math.ceil(0.01 * len(X)),
-        min_samples_leaf=math.ceil(0.001 * len(X)),
-        max_depth=8,
+        learning_rate=0.15,
+        n_estimators=90,
+        max_depth=13,
         max_features="sqrt",
+        n_iter_no_change=4,
+        tol=1e-3,
         subsample=0.8,
-        random_state=42
+        random_state=42,
+        verbose=1
     ),
-    param_grid=param_test_1, scoring="roc_auc", cv=5
+    param_grid=param_test3, scoring="roc_auc", verbose=2, cv=3
 ).fit(train_df[predictors], y)
 
-print(grid_search1.cv_results_, grid_search1.best_params_, grid_search1.best_score_)
+print(grid_search3.cv_results_, grid_search3.best_params_, grid_search3.best_score_)
 
+param_test4 = {}
 
 # confusion_viz = ConfusionMatrix(gb2, classes=["Male", "Female"])
 # confusion_viz.score(X_test, y_test)

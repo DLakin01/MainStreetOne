@@ -19,7 +19,7 @@ from helpers import parse_julia_file, parse_tweet_text, get_corpus, plot_learnin
 if __name__ == "__main__":
     tar = tarfile.open("mso_ds_interview.tgz", "r")
     manifest = tar.extractfile("ds_interview/manifest.jl")
-    manifest_details = parse_julia_file(manifest)[:100]
+    manifest_details = parse_julia_file(manifest)
 
 
     tweets_data_list = []
