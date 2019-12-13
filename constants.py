@@ -1,7 +1,7 @@
 from nltk.corpus import stopwords
 
-FILE_PATH = "C:\\Users\\DLakin\\Desktop\\Github"
-# FILE_PATH = "C:\\Users\\DLaki\\OneDrive\\Desktop\\Github"
+# FILE_PATH = "C:\\Users\\DLakin\\Desktop\\Github"
+FILE_PATH = "C:\\Users\\DLaki\\OneDrive\\Desktop\\Github"
 
 TWEET_COLUMNS = ["id", "combined_text", "language", "has_mention", "num_mentions", "has_hashtags", "num_hashtags",
                  "gender"]
