@@ -85,7 +85,7 @@ def parse_tweet_text(tweet_obj: dict):
 def extract_linguistic_features(texts, tweet_ids, spacy_nlp):
     all_features = []
 
-    for i, doc in enumerate(spacy_nlp.pipe(texts, n_threads=16, batch_size=10000)):
+    for i, doc in enumerate(spacy_nlp.pipe(texts, disable=["tagger", "parser", "ner"], n_threads=16, batch_size=10000)):
         features = {
             "id": tweet_ids[i],
             "num_words": len(doc),
