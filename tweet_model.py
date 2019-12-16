@@ -36,13 +36,14 @@ import tarfile
 import random
 import spacy
 import json
+import shap
 import re
 
+from sklearn.metrics import roc_auc_score, confusion_matrix, accuracy_score, roc_curve
 from sklearn.preprocessing import RobustScaler, OneHotEncoder
 from emoji import UNICODE_EMOJI, UNICODE_EMOJI_ALIAS
 from sklearn.model_selection import train_test_split
 from sklearn.compose import ColumnTransformer
-from sklearn.metrics import roc_auc_score
 from requests.auth import HTTPBasicAuth
 from sklearn.pipeline import Pipeline
 from tarfile import ExFileObject
@@ -291,17 +292,20 @@ for item in split_by_lang:
 # <markdowncell>
 # After all linguistic features have been extracted, we combine the various language-specific dataframes back into
 # one, and begin scaling. We've collected a wide range of numeric data, and have categorical data in the form of the
-# Textblob sentiment scores, and all need to be scaled. To do this efficiently, we set up a nested series of sklearn
-# Pipelines, contained inside a ColumnTransformer, which we then use to scale all our data at once. Our numeric data
-# is scaled using sklearn's RobustScaler, which helps avoid distortion due to outliers. The categorical sentiment data
-# is transformed using sklearn's OneHotEncoder.
+# Textblob sentiment scores, and all need to be scaled. To do this efficiently, we set up a nested series of
+# Scikit-Learn Pipelines, contained inside a ColumnTransformer, which we then use to scale all our data at once. Our
+# numeric data is scaled using Scikit-Learn's RobustScaler, which helps avoid distortion due to outliers. The
+# categorical sentiment data is transformed using Scikit-Learn's OneHotEncoder.
+#
+# After scaling, we split the data into training and testing sets, using Scikit-Learn's train_test_split utility
+# function
 
 # <codecell>
 X = pd.concat([lang_item["df"] for lang_item in split_by_lang])
 y = np.array(X["gender"].map({"M": 0, "F": 1}))
 
 X.drop(columns=["gender", "language", "combined_text"], inplace=True)
-predictors = pd.get_dummies(X, columns=["sentiment"]).columns.tolist()
+column_labels = pd.get_dummies(X, columns=["sentiment"]).columns.tolist()
 
 # Scale numeric features
 numeric_features = ["num_mentions", "num_hashtags", "num_nouns", "num_pronouns", "num_adjectives", "num_particles",
@@ -325,7 +329,39 @@ preprocessor = ColumnTransformer(
 )
 X = preprocessor.fit_transform(X)
 
+# Split into train and testing data
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=20000, random_state=42)
 
+# <markdowncell>
+# Now that we've collected and scaled all our data, we can start using it to train and test models. We'll be using
+# the Light Gradient Boosting Machine (LightGBM) family of algorithms developed by Microsoft, which delivers the full
+# predictive power of Gradient Boosting Classification while offering a considerable speed advantage over the
+# counterparts available from libraries like Scikit-Learn.
+#
+# I've chosen to use Gradient Boosting with cross-validation as my model for this task because of its iterative and
+# (hopefully) self-correcting internal logic. On its own, gradient boosting classification uses multiple (often dozens)
+# rounds of internal decision trees, each working in sequence to make predictions and learn from the trees that came
+# before. By the time the algorithm has reached the end of the sequence of trees defined by the user, the chain of
+# estimators has experimented with the weighting of the features available and arrived at its best guess of how those
+# features related to the target variable.
+#
+# With the addition of k-fold cross-validation, the final model derived from training is made even stronger. In each
+# round of CV, the model has access to k - 1 parts of the data, with the final part being held out as that round's
+# "test" set. In this fashion, we can arrive at the best-performing model possible.
+#
+# In the below cell, we define several helper functions that we will use to perform cross-validation with LightGBM.
+# We will use both Randomized and Grid parameter search in tuning the model - more on that below. We will also be
+# using early stopping in all boosting processes. Although each round of cross-validation will have up to 1000 boosting
+# estimators available, if the model goes through 50 estimators without improvement, it will end iteration and move on
+# to the next round of CV.
+#
+# To measure model improvement, we will be using the ROC-AUC scoring metric. This measure provides a good indicator of
+# how the model is doing against each set of validation data, as it takes into account both the true positive and false
+# positive rate to create a composite score that measures how well the model is doing at distinguishing between positive
+# negative predictions of a Twitter user's gender.
+
+
+# <codecell>
 def eval_lgb_results(hyperparams, iteration):
     """
     Scoring helper for grid and random search. Returns CV score from the given
@@ -340,9 +376,9 @@ def eval_lgb_results(hyperparams, iteration):
     cv_res = lgb.cv(
         params=hyperparams,
         train_set=train_set,
-        num_boost_round=500,
-        nfold=4,
-        early_stopping_rounds=25,
+        num_boost_round=1000,
+        nfold=5,
+        early_stopping_rounds=50,
         metrics="auc",
         seed=42,
         verbose_eval=True
@@ -371,34 +407,21 @@ def light_random_search(param_grid, max_evals=5):
     return results
 
 
-def light_grid_search(param_grid):
-    results = pd.DataFrame(columns=["score", "params", "iteration"])
+# <markdowncell>
+# To take full advantage of LightGBM's capabilities, we convert our training data into a LightGBM Dataset object. We
+# then begin training a Gradient Boosting model on our data. However, the performance and behavior of Gradient
+# Boosting models depends greatly on the value of certain model parameters, also known as hyperparameters. We could
+# pick these values at random and hope for the best, but that would be an uncertain and unreliable process. Instead,
+# we'll first define a range for many of those parameters, and then use a ten-fold Randomized Search to zero in on a
+# strong set of candidates. Each iteration of the search will select a random from our defined ranges for each param,
+# and then conduct k-fold cross-validation.
+#
+# After our ten iterations of Random Search, we train a new model with the best set of parameters identified, and test
+# it against the test data we held out earlier. After prediction, we take a look at which features influenced our model
+# most strongly.
 
-    # Get every possible combination of params from the grid
-    keys, grid_vals = zip(*param_grid.items())
-
-    # Iterate over every possible combination of hyperparameters
-    for i, v in enumerate(product(*grid_vals)):
-        iter_params = dict(zip(keys, v))
-        results.loc[i, :] = eval_lgb_results(iter_params, i)
-
-    # Sort by best score
-    results.sort_values("score", ascending=False, inplace=True)
-    results.reset_index(inplace=True)
-    return results
-
-
-# Split into train and testing data
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=20000, random_state=42)
-
-random.seed(42)
-
-# Convert to LGB Datasets for speed
+# <codecell>
 train_set = lgb.Dataset(data=X_train, label=y_train)
-test_set = lgb.Dataset(data=X_test, label=y_test)
-
-model = lgb.LGBMModel()
-default_params = model.get_params()
 
 param_grid = {
     'boosting_type': ['gbdt'],
@@ -427,86 +450,79 @@ model = lgb.LGBMClassifier(**rsearch_params, random_state=42)
 model.fit(X_train, y_train)
 
 preds = model.predict(X_test)
-
-print("The best model from random search scores {:.5f} ROC-AUC on the test set".format(roc_auc_score(y_test, preds)))
-
-# Plot feature importances
-importances = model.feature_importances_
-names = model.booster_.feature_name()
-
-plt.figure()
-plt.title("Random Search Feature Importances")
-plt.bar(range(X_test.shape[1]), importances)
-plt.xticks(list(range(X_test.shape[1])), labels=names, rotation=90)
-plt.show()
-
-# Use grid search to refine hyperparameters, cutting down on some
-rand_leaves = rsearch_params["num_leaves"]
-grid_num_leaves = range((rand_leaves - 30), (rand_leaves + 31), 20)
-
-rand_learn_rate = rsearch_params["learning_rate"]
-grid_learning_rate = np.logspace(
-    np.log10(np.power(rand_learn_rate, 1.5)),
-    np.log10(np.power(rand_learn_rate, .55)),
-    base=10, num=4
-)
-
-rand_subsample = rsearch_params["subsample_for_bin"]
-grid_subsample = range((rand_subsample - 2000), (rand_subsample + 2001), 2000)
-
-rand_min_child = rsearch_params["min_child_samples"]
-grid_min_child = range((rand_min_child - 20), (rand_min_child + 21), 15)
-
-param_grid2 = {
-    'boosting_type': ['gbdt'],
-    'num_leaves': list(grid_num_leaves),
-    'learning_rate': list(grid_learning_rate),
-    'subsample_for_bin': list(grid_subsample),
-    'min_child_samples': list(grid_min_child),
-    'reg_alpha': [rsearch_params["reg_alpha"]],
-    'reg_lambda': [rsearch_params["reg_lambda"]],
-    'colsample_bytree': [rsearch_params["colsample_bytree"]],
-    'subsample': [rsearch_params["subsample"]],
-    'is_unbalance': [False]
-}
-
-grid_results = light_grid_search(param_grid2)
-
-# Get the best params from the random search
-gsearch_params = grid_results.loc[0, "params"]
-
-# Create, train, and test model with the derived params
-model = lgb.LGBMClassifier(**gsearch_params, random_state=42)
-model.fit(X_train, y_train)
-
-preds = model.predict(X_test)
-
-print("The best model from grid search scores {:.5f} ROC-AUC on the test set".format(roc_auc_score(y_test, preds)))
+roc_auc = roc_auc_score(y_test, preds)
+print("The best model from random search scores {:.5f} ROC-AUC on the test set".format(roc_auc))
 
 # Plot feature importances
 importances = model.feature_importances_
-names = model.booster_.feature_name()
+tuples = sorted(zip(column_labels, importances), key=lambda x: x[1])
 
-plt.figure()
-plt.title("Random Search Feature Importances")
-plt.bar(range(X_test.shape[1]), importances)
-plt.xticks(list(range(X_test.shape[1])), labels=names, rotation=90)
+# Strip out features with zero importance
+tuples = [x for x in tuples if x[1] > 0]
+feature_names, values = zip(*tuples)
+
+fig, (ax1, ax2) = plt.subplots(nrows=1, ncols=2, figsize=(15,5))
+ax1.set_title("Random Search Feature Importances")
+ax1.barh(np.arange(len(values)), values, align="center")
+ax1.set_yticks(np.arange(len(values)))
+ax1.set_yticklabels(feature_names)
+ax1.set_xlim(0, max(values) * 1.1)
+ax1.set_ylim(-1, len(values))
+ax1.set_xlabel("Feature Importance")
+ax1.set_ylabel("Features")
+ax1.grid(True)
+
+# Plot Confusion Matrix
+cm = confusion_matrix(y_test, preds)
+labels = ['Male', 'Female']
+sns.heatmap(cm, xticklabels=labels, yticklabels=labels, annot=True, fmt='d', cmap="Blues", vmin=0.2)
+ax2.set_title("Confusion Matrix")
+ax2.set_ylabel("Ground Truth")
+ax2.set_xlabel("Predictions")
+
+plt.tight_layout()
 plt.show()
 
-random_results["search"] = "random"
-grid_results["search"] = "grid"
+explainer = shap.TreeExplainer(model)
+shap_values = explainer.shap_values(X_train)
+shap.force_plot(explainer.expected_value[1], shap_values[1[0,:], column_labels])
 
-all_hyper_params = random_results.append(grid_results)
 
-best_random_hyperparams = random_results.iloc[random_results["score"].astype(np.float).idxmax()].copy()
-best_grid_hyperparams = grid_results.iloc[grid_results["score"].astype(np.float).idxmax()].copy()
+# <markdowncell>
+# As we can see above, our model got a score of approximately 0.77 ROC-AUC on the test set, while scoring over 0.80
+# in cross-validation. Not bad! In a perfect world with a much more powerful computer available, we could do a lot
+# better by feeding the results of our random search into an exhaustive grid search. While I will not implement this
+# here due to the computation and time cost, we can sketch out how it would work.
+#
+# Starting from the best hyperparameter values derived from random search, we would define new, focused ranges around
+# each one, and feed that grid of params into an exhaustive search. In the cell below we define a helper method that
+# would conduct the search for us.
 
-sns.lmplot('iteration', 'score', hue="search", data=all_hyper_params, size=8)
-plt.scatter(best_random_hyperparams["iteration"], best_random_hyperparams["score"],
-            marker="*", s=400, c="blue", edgecolor="k")
-plt.scatter(best_grid_hyperparams["iteration"], best_grid_hyperparams["score"],
-            marker="*", s=400, c="orange", edgecolor="k")
-plt.xlabel('Iteration')
-plt.ylabel('ROC AUC')
-plt.title("Validation ROC AUC versus Iteration")
-plt.show()
+# <codecell>
+def light_grid_search(param_grid):
+    results = pd.DataFrame(columns=["score", "params", "iteration"])
+
+    # Get every possible combination of params from the grid
+    keys, grid_vals = zip(*param_grid.items())
+
+    # Iterate over every possible combination of hyperparameters
+    for i, v in enumerate(product(*grid_vals)):
+        iter_params = dict(zip(keys, v))
+        results.loc[i, :] = eval_lgb_results(iter_params, i)
+
+    # Sort by best score
+    results.sort_values("score", ascending=False, inplace=True)
+    results.reset_index(inplace=True)
+    return results
+
+# <markdowncell>
+# To ensure the results of the grid search would be directly comparable to their randomized counterparts, we'd use the
+# same process of k-fold cross-validation. After the search finishes running, we'd follow the same steps we did above -
+# taking the best hyperparameters, using them to train a model on our data, and then seeing how the model did against
+# our held-out test set.
+
+# <markdowncell>
+# Turning back to the performance of our random-derived model, the gap between the scores on validation and test data
+# suggests model overfitting. Future versions of the model would likely benefit from a different (perhaps smaller) mix
+# of features. One possible alternative approach would be to stick to only English-language tweets and incorporate topic
+# modeling into the feature extraction process to derive topic-based categorical features.
